@@ -8,7 +8,9 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.TextView
 import androidx.annotation.RequiresApi
+import androidx.core.content.ContextCompat
 import androidx.recyclerview.widget.RecyclerView
+import com.odukle.toastlyrics.ui.sync.currentLine
 
 private const val TAG = "SyncRVAdapter"
 
@@ -33,9 +35,15 @@ class SyncRVAdapter(
     @RequiresApi(Build.VERSION_CODES.Q)
     override fun onBindViewHolder(holder: LyricsViewHolder, position: Int) {
         Log.d(TAG, "onBindViewHolder: called")
-        listRow[position].content
-        holder.tv.text = listRow[position].content
-        holder.tv.setTextAppearance(R.style.LyricsStyleNormal)
+        if (position == currentLine) {
+            holder.tv.text = listRow[position].content
+            holder.tv.background =
+                ContextCompat.getDrawable(context, R.drawable.lyric_text_bg)
+            holder.tv.setTextAppearance(R.style.LyricsStyleBold)
+        } else {
+            holder.tv.text = listRow[position].content
+            holder.tv.setTextAppearance(R.style.LyricsStyleNormal)
+        }
     }
 
     override fun getItemCount(): Int {

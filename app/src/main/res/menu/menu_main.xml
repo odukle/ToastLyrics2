@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:tools="http://schemas.android.com/tools"
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    tools:ignore="HardcodedText">
+
+    <item android:id="@+id/other_apps"
+        android:title="more apps by the developer"
+        android:icon="@drawable/ic_twotone_shop_24"
+        app:showAsAction="ifRoom"/>
+
+    <item android:id="@+id/blurred_bg"
+        android:title="cover art background"
+        android:icon="@drawable/ic_twotone_blur_on_24"
+        app:showAsAction="ifRoom"/>
+
+</menu>

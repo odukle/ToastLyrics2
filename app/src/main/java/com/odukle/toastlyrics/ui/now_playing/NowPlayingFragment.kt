@@ -2,22 +2,29 @@ package com.odukle.toastlyrics.ui.now_playing
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.graphics.drawable.BitmapDrawable
 import android.media.AudioManager
+import android.media.MediaMetadata
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.SeekBar
 import androidx.annotation.RequiresApi
+import androidx.constraintlayout.widget.ConstraintLayout
+import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
+import androidx.core.view.get
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.ViewModelProvider
 import androidx.recyclerview.widget.LinearLayoutManager
-import com.google.android.gms.ads.InterstitialAd
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.odukle.toastlyrics.*
+import com.odukle.toastlyrics.ui.home.IS_SERVICE_STOPPED
 import es.dmoral.toasty.Toasty
 import kotlinx.android.synthetic.main.fragment_now_playing.*
 import kotlin.math.absoluteValue
@@ -26,15 +33,12 @@ private const val TAG = "NowPlayingFragment"
 var npShowing = false
 var delay = 0
 var bAdCount = 0
-var iAdCountNP = 0
-const val I_AD_COUNT_NP = "iAdCountNP"
-const val I_AD_COUNT_SF = "iAdCountSF"
+const val I_AD_COUNT = "iAdCount"
 const val INTERSTITIAL_AD_UNIT_ID = "ca-app-pub-9193191601772541/2896242023"
 
 class NowPlayingFragment : Fragment() {
 
     private lateinit var nowPlayingViewModel: NowPlayingViewModel
-    private lateinit var mInterstitialAd: InterstitialAd
     private lateinit var audioManager: AudioManager
     private lateinit var adapter: NPRecyclerViewAdapter
     private lateinit var sharedPref: SharedPreferences
@@ -46,10 +50,6 @@ class NowPlayingFragment : Fragment() {
 
     companion object {
         lateinit var instance: NowPlayingFragment
-
-        fun isInitialized(): Boolean {
-            return this::instance.isInitialized
-        }
     }
 
     override fun onCreateView(
@@ -61,15 +61,17 @@ class NowPlayingFragment : Fragment() {
         instance = this
         audioManager = requireContext().getSystemService(Context.AUDIO_SERVICE) as AudioManager
         sharedPref = requireContext().getSharedPreferences("pref", Context.MODE_PRIVATE)
-        mInterstitialAd = InterstitialAd(requireContext())
-        mInterstitialAd.adUnitId = INTERSTITIAL_AD_UNIT_ID
 
-        iAdCountNP = sharedPref.getInt(I_AD_COUNT_NP, 0)
-        iAdCountNP++
-        sharedPref.edit().putInt(I_AD_COUNT_NP, iAdCountNP).apply()
+        var iAdCount = sharedPref.getInt(I_AD_COUNT, 0)
+        iAdCount++
+        sharedPref.edit().putInt(I_AD_COUNT, iAdCount).apply()
 
-        if (iAdCountNP >= 5) {
-
+        if (iAdCount >= 10) {
+            if (MainActivity.mInterstitialAd.isLoaded) {
+                MainActivity.mInterstitialAd.show()
+                iAdCount = 0
+                sharedPref.edit().putInt(I_AD_COUNT, iAdCount).apply()
+            }
         }
 
         nowPlayingViewModel =
@@ -77,8 +79,9 @@ class NowPlayingFragment : Fragment() {
         val root = inflater.inflate(R.layout.fragment_now_playing, container, false)
 
         nowPlayingViewModel.track.observe(viewLifecycleOwner, {
+            track_tv.text = it
             track = it
-            track_tv.text = track
+
             setIcons()
         })
 
@@ -108,6 +111,28 @@ class NowPlayingFragment : Fragment() {
         super.onViewCreated(view, savedInstanceState)
         npShowing = true
 
+        Handler(Looper.getMainLooper()).postDelayed({
+            MainActivity.menuMain[0].isVisible = false
+            MainActivity.menuMain[1].isVisible = true
+        }, 500)
+
+        if (albumArt != null) {
+            album_art_iv.setImageBitmap(albumArt)
+            if (sharedPref.getBoolean(CONTAINER_HAS_BG, false)) {
+                val container = requireActivity().findViewById<ConstraintLayout>(R.id.container)
+                val blurred = fastBlur(albumArt!!, 0.5f, 20)
+                container.background = BitmapDrawable(requireContext().resources, blurred)
+            }
+        } else {
+            if (mediaController != null && isOnline(requireContext())) {
+                val track1 = currentTrack?.replace("/", "")?.replace("\\", "") ?: "Home"
+                val artist1 = currentArtist?.replace("/", "")?.replace("\\", "") ?: "Davis"
+                val query = "$track1 $artist1"
+
+                NowPlayingViewModel.setAlbumArt(query)
+            }
+        }
+
         adCard_np.visibility = View.GONE
         close_ad.setOnClickListener {
             adCard_np.visibility = View.GONE
@@ -124,20 +149,33 @@ class NowPlayingFragment : Fragment() {
         setIcons()
 
         val submitListenerOn = View.OnClickListener {
-            if (isOnline(requireContext())) {
-                if (track != null && artist != null) {
-                    nowPlayingViewModel.submitLyrics(track!!, artist!!)
+
+            val dialog = MaterialAlertDialogBuilder(requireContext())
+            dialog.setTitle("Submit change?")
+                .setPositiveButton("Submit") { d, _ ->
+                    if (isOnline(requireContext())) {
+                        if (track != null && artist != null) {
+                            nowPlayingViewModel.submitLyrics(track!!, artist!!)
+                        }
+                    } else {
+                        Toasty.error(requireContext(), "No internet").show()
+                    }
                 }
-            } else {
-                Toasty.normal(requireContext(), "No internet").show()
-            }
+                .setNegativeButton("Cancel") { d, _ ->
+                    d.dismiss()
+                }
+                .setCancelable(false)
+                .show()
+
         }
 
         val submitListenerOff = View.OnClickListener {
-            Toasty.normal(requireContext(), "No Change").show()
+            Toasty.info(requireContext(), "No Change").show()
         }
 
-        adapter = NPRecyclerViewAdapter(requireContext(), listRows)
+        NPRecyclerViewAdapter.prepareMixedList()
+        setRecyclerView()
+        adapter = NPRecyclerViewAdapter(requireContext(), mixedList)
         lyrics_rv.layoutManager = LinearLayoutManager(requireContext())
         lyrics_rv.adapter = adapter
         requireActivity().runOnUiThread {
@@ -178,7 +216,7 @@ class NowPlayingFragment : Fragment() {
                     )
                 }
             } else {
-                Toasty.normal(
+                Toasty.error(
                     requireContext(),
                     "No music Playing!\n(if music is already playing then pause and play it again)"
                 ).show()
@@ -219,7 +257,7 @@ class NowPlayingFragment : Fragment() {
                     )
                 }
             } else {
-                Toasty.normal(
+                Toasty.error(
                     requireContext(),
                     "No music Playing!\n(if music is already playing then pause and play it again)"
                 ).show()
@@ -233,7 +271,7 @@ class NowPlayingFragment : Fragment() {
                     mediaController!!.transportControls.seekTo(pos + 5000L)
                 }
             } else {
-                Toasty.normal(
+                Toasty.error(
                     requireContext(),
                     "No music Playing!\n(if music is already playing then pause and play it again)"
                 ).show()
@@ -249,7 +287,7 @@ class NowPlayingFragment : Fragment() {
                     }
                 }
             } else {
-                Toasty.normal(
+                Toasty.error(
                     requireContext(),
                     "No music Playing!\n(if music is already playing then pause and play it again)"
                 ).show()
@@ -261,7 +299,7 @@ class NowPlayingFragment : Fragment() {
                 mediaController!!.transportControls.skipToNext()
                 delay = 0
                 bAdCount++
-                if (bAdCount >= 3) {
+                if (bAdCount >= 5) {
                     bAdCount = 0
                     bannerAd_np.loadAd(MainActivity.adRequest)
                     adCard_np.visibility = View.VISIBLE
@@ -291,8 +329,9 @@ class NowPlayingFragment : Fragment() {
                     mediaController!!.transportControls.pause()
                     mediaController!!.transportControls.play()
                 }, 1000)
+
             } else {
-                Toasty.normal(
+                Toasty.error(
                     requireContext(),
                     "No music Playing!\n(if music is already playing then pause and play it again)"
                 ).show()
@@ -329,7 +368,7 @@ class NowPlayingFragment : Fragment() {
                 }, 1000)
 
             } else {
-                Toasty.normal(
+                Toasty.error(
                     requireContext(),
                     "No music Playing!\n(if music is already playing then pause and play it again)"
                 ).show()
@@ -344,7 +383,6 @@ class NowPlayingFragment : Fragment() {
                         mediaController!!.transportControls.seekTo(progress.toLong())
                     }
                 }
-
             }
 
             override fun onStartTrackingTouch(seekBar: SeekBar?) {}
@@ -355,31 +393,33 @@ class NowPlayingFragment : Fragment() {
 
         delay_card.setOnClickListener {
             if (mediaController != null) {
-                delay += 500
-                val delayed = if (delay < 0) "hastened" else "delayed"
-                btn_submit_np.setOnClickListener(submitListenerOn)
-                if (synced) {
-                    Toasty.normal(
-                        requireContext(),
-                        "Lyrics $delayed by ${(delay.toDouble() / 1000).absoluteValue} sec"
-                    )
-                        .show()
-                    nowPlayingViewModel.delay()
-                    if (audioManager.isMusicActive) {
-                        mediaController!!.transportControls.pause()
-                        mediaController!!.transportControls.play()
+
+                if (mixedList.size > 1) {
+                    delay += 500
+                    val delayed = if (delay < 0) "hastened" else "delayed"
+                    btn_submit_np.setOnClickListener(submitListenerOn)
+                    if (synced) {
+                        Toasty.normal(
+                            requireContext(),
+                            "Lyrics $delayed by ${(delay.toDouble() / 1000).absoluteValue} sec"
+                        ).show()
+                        try {
+                            nowPlayingViewModel.delay()
+                        } finally {
+                            refreshSong()
+                        }
+
                     } else {
-                        mediaController!!.transportControls.play()
-                        mediaController!!.transportControls.pause()
+                        Toasty.info(
+                            requireContext(),
+                            "Lyrics not synced, you can sync them by clicking on the sync tab below"
+                        ).show()
                     }
-                } else {
-                    Toasty.normal(
-                        requireContext(),
-                        "Lyrics not synced, you can sync them by clicking on the sync tab below"
-                    ).show()
                 }
+
+
             } else {
-                Toasty.normal(
+                Toasty.error(
                     requireContext(),
                     "No music Playing!\n(if music is already playing then pause and play it again)"
                 ).show()
@@ -388,31 +428,32 @@ class NowPlayingFragment : Fragment() {
 
         hasten_card.setOnClickListener {
             if (mediaController != null) {
-                delay -= 500
-                val delayed = if (delay < 0) "hastened" else "delayed"
-                btn_submit_np.setOnClickListener(submitListenerOn)
-                if (synced) {
-                    Toasty.normal(
-                        requireContext(),
-                        "Lyrics $delayed by ${delay.toDouble() / 1000} sec"
-                    )
-                        .show()
-                    nowPlayingViewModel.hasten()
-                    if (audioManager.isMusicActive) {
-                        mediaController!!.transportControls.pause()
-                        mediaController!!.transportControls.play()
+
+                if (mixedList.size > 1) {
+                    delay -= 500
+                    val delayed = if (delay < 0) "hastened" else "delayed"
+                    btn_submit_np.setOnClickListener(submitListenerOn)
+                    if (synced) {
+                        Toasty.normal(
+                            requireContext(),
+                            "Lyrics $delayed by ${(delay.toDouble() / 1000).absoluteValue} sec"
+                        )
+                            .show()
+                        try {
+                            nowPlayingViewModel.hasten()
+                        } finally {
+                            refreshSong()
+                        }
                     } else {
-                        mediaController!!.transportControls.play()
-                        mediaController!!.transportControls.pause()
+                        Toasty.info(
+                            requireContext(),
+                            "Lyrics not synced, you can sync them by clicking on the sync tab below."
+                        ).show()
                     }
-                } else {
-                    Toasty.normal(
-                        requireContext(),
-                        "Lyrics not synced, you can sync them by clicking on the sync tab below."
-                    ).show()
                 }
+
             } else {
-                Toasty.normal(
+                Toasty.error(
                     requireContext(),
                     "No music Playing!\n(if music is already playing then pause and play it again)"
                 ).show()
@@ -431,58 +472,115 @@ class NowPlayingFragment : Fragment() {
     override fun onResume() {
         super.onResume()
         npShowing = true
+        setRecyclerView()
         requireActivity().runOnUiThread {
             lyrics_rv.adapter?.notifyDataSetChanged()
-            if (mediaController != null) {
-                if (audioManager.isMusicActive) {
-                    mediaController!!.transportControls.pause()
-                    mediaController!!.transportControls.play()
-                }
+
+            if (currentTrack != null && currentArtist != null) {
+                track_tv.text = currentTrack
+                artist_tv.text = currentArtist
+                seekbar.progress = nowPlayingViewModel.position.value?.toInt() ?: 0
+            } else if (mediaController != null) {
+                val metadata = mediaController!!.metadata
+                val mTrack = metadata!!.getString(MediaMetadata.METADATA_KEY_TITLE)
+                val mArtist = metadata.getString(MediaMetadata.METADATA_KEY_ARTIST)
+
+                track_tv.text = mTrack
+                artist_tv.text = mArtist
             }
         }
-
         setIcons()
     }
 
     private fun setIcons() {
-        if (mediaController != null) {
-            if (audioManager.isMusicActive) {
-                toggle_play_btn.setImageDrawable(
-                    ContextCompat.getDrawable(
-                        requireContext(),
-                        R.drawable.ic_twotone_pause_circle_filled_24
+        try {
+            if (mediaController != null) {
+                if (audioManager.isMusicActive) {
+                    toggle_play_btn.setImageDrawable(
+                        ContextCompat.getDrawable(
+                            requireContext(),
+                            R.drawable.ic_twotone_pause_circle_filled_24
+                        )
                     )
-                )
 
-                refresh_img.setImageDrawable(
-                    ContextCompat.getDrawable(
-                        requireContext(),
-                        R.drawable.pause_green
+                    refresh_img.setImageDrawable(
+                        ContextCompat.getDrawable(
+                            requireContext(),
+                            R.drawable.pause_green
+                        )
                     )
-                )
-            } else {
-                toggle_play_btn.setImageDrawable(
-                    ContextCompat.getDrawable(
-                        requireContext(),
-                        R.drawable.ic_twotone_play_circle_filled_24
+                } else {
+                    toggle_play_btn.setImageDrawable(
+                        ContextCompat.getDrawable(
+                            requireContext(),
+                            R.drawable.ic_twotone_play_circle_filled_24
+                        )
                     )
-                )
 
-                refresh_img.setImageDrawable(
-                    ContextCompat.getDrawable(
-                        requireContext(),
-                        R.drawable.ic_twotone_play_arrow_24
+                    refresh_img.setImageDrawable(
+                        ContextCompat.getDrawable(
+                            requireContext(),
+                            R.drawable.ic_twotone_play_arrow_24
+                        )
                     )
-                )
+                }
             }
-        } else {
-            refresh_img.setImageDrawable(
-                ContextCompat.getDrawable(
-                    requireContext(),
-                    R.drawable.ic_twotone_error_24
-                )
-            )
+        } catch (e: Exception) {
+            Log.e(TAG, "setIcons: ${e.stackTraceToString()}")
         }
     }
+
+    private fun setRecyclerView() {
+        if (NotificationManagerCompat.getEnabledListenerPackages(requireContext())
+                .contains(requireContext().packageName)
+        ) {
+            if (mixedList.isEmpty()) {
+                val iString = if (mediaController == null) {
+                    if (!sharedPref.getBoolean(IS_SERVICE_STOPPED, false)) {
+                        "Play music and come back here"
+                    } else {
+                        "Lyrics Service is stopped"
+                    }
+                } else {
+                    "No music Playing!\n" +
+                            "(if music is already playing then pause and play it again)"
+                }
+
+                val instruction = LrcRow(0, iString, "00:00.00")
+                mixedList.clear()
+                listRows.clear()
+                mixedList.add(instruction)
+                listRows.add(instruction)
+            } else {
+                if (sharedPref.getBoolean(IS_SERVICE_STOPPED, false)) {
+                    listRows.clear()
+                    mixedList.clear()
+                    val instruction = LrcRow(0, "Lyrics Service is stopped", "00:00.00")
+                    mixedList.add(instruction)
+                    listRows.add(instruction)
+                } else {
+                    if (mediaController == null) {
+                        listRows.clear()
+                        mixedList.clear()
+                        val instruction = LrcRow(0, "Play music and come back here", "00:00.00")
+                        mixedList.add(instruction)
+                        listRows.add(instruction)
+                    }
+                }
+            }
+        } else {
+            listRows.clear()
+            mixedList.clear()
+            val instruction = LrcRow(
+                0,
+                "Please allow notification access so that we can detect currently playing music",
+                "00:00.00"
+            )
+            mixedList.add(instruction)
+            listRows.add(instruction)
+        }
+
+    }
+
 
 }
